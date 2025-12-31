@@ -1,8 +1,7 @@
 import streamlit as st
 import random
-import time
 import json
-from streamlit_autorefresh import st_autorefresh
+import time
 
 # Firebase Imports
 import firebase_admin
@@ -11,7 +10,7 @@ from firebase_admin import credentials, firestore
 # --- הגדרות עמוד ועיצוב ---
 st.set_page_config(page_title="איקס עיגול אולטימטיבי", layout="wide", initial_sidebar_state="expanded")
 
-# הזרקת CSS לעיצוב רספונסיבי ותמיכה בעברית (RTL)
+# הזרקת CSS לעיצוב רספונסיבי כפוי (Grid) ותמיכה בעברית
 st.markdown("""
     <style>
     /* כיוון כללי לימין-שמאל */
@@ -20,43 +19,59 @@ st.markdown("""
         text-align: right;
     }
     
-    /* התאמת כפתורים למובייל ולמסך מחשב */
+    /* --- תיקון קריטי למובייל: כפיית תצוגת גריד --- */
+    /* זה מכריח את העמודות בתוך הלוח לא להישבר לשורות במובייל */
     div[data-testid="column"] {
-        padding: 1px !important;
+        width: 33.33% !important;
+        flex: 1 1 33.33% !important;
         min-width: 0 !important;
+        padding: 1px !important;
     }
-    
+
     /* עיצוב כפתורי המשחק */
     button {
         padding: 0px !important;
-        min-height: 35px !important; /* גובה מינימלי קטן יותר למובייל */
+        min-height: 40px !important;
         height: 100%;
-        font-size: 14px !important;
+        width: 100%;
+        font-size: 16px !important;
         font-weight: bold !important;
         margin: 0px !important;
+        border-radius: 4px !important;
+        border: 1px solid #ccc !important;
     }
     
-    /* צבעים לניצחונות */
-    .won-x { background-color: #ffcccc; color: black; display: flex; align-items: center; justify-content: center; font-size: 2em; border: 1px solid #ddd; height: 100px; }
-    .won-o { background-color: #ccefff; color: black; display: flex; align-items: center; justify-content: center; font-size: 2em; border: 1px solid #ddd; height: 100px; }
-    
-    /* סימון הלוח הפעיל */
-    .active-board {
-        border: 3px solid #FF4B4B;
+    /* צבעים לניצחונות בלוחות קטנים */
+    .won-box {
+        height: 120px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 3em;
+        font-weight: bold;
         border-radius: 8px;
-        padding: 3px;
-        background-color: rgba(255, 75, 75, 0.05);
+    }
+    .won-x { background-color: #ffcccc; color: #cc0000; }
+    .won-o { background-color: #ccefff; color: #0066cc; }
+    
+    /* --- סימון לוח פעיל --- */
+    /* אנו נשתמש ב-st.container עם border, אבל נוסיף צבע רקע דרך CSS ספציפי אם צריך */
+    
+    /* הסתרת אלמנטים מיותרים של הסטרים-ליט כדי לחסוך מקום */
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 1rem;
     }
     
-    /* התאמות למסכים קטנים (מובייל) */
-    @media only screen and (max-width: 600px) {
+    /* התאמות למסכים קטנים מאוד */
+    @media only screen and (max-width: 400px) {
         button {
             min-height: 30px !important;
-            font-size: 10px !important;
+            font-size: 12px !important;
         }
-        .won-x, .won-o {
-            height: 80px;
-            font-size: 1.5em;
+        .won-box {
+            height: 90px;
+            font-size: 2em;
         }
     }
     </style>
@@ -90,11 +105,13 @@ init_firebase()
 
 def check_win(board_grid):
     """בדיקת ניצחון בלוח 3x3"""
+    # שורות ועמודות
     for i in range(3):
         if board_grid[i][0] == board_grid[i][1] == board_grid[i][2] and board_grid[i][0] != "":
             return board_grid[i][0]
         if board_grid[0][i] == board_grid[1][i] == board_grid[2][i] and board_grid[0][i] != "":
             return board_grid[0][i]
+    # אלכסונים
     if board_grid[0][0] == board_grid[1][1] == board_grid[2][2] and board_grid[0][0] != "":
         return board_grid[0][0]
     if board_grid[0][2] == board_grid[1][1] == board_grid[2][0] and board_grid[0][2] != "":
@@ -109,11 +126,9 @@ def init_game_state():
         "board": [[[["" for _ in range(3)] for _ in range(3)] for _ in range(3)] for _ in range(3)],
         "macro_board": [["" for _ in range(3)] for _ in range(3)],
         "current_turn": "X",
-        "next_board": None,
+        "next_board": None, # None = בחירה חופשית
         "winner": None,
-        "game_over": False,
-        "last_move_time": time.time(), # לטיימר
-        "turn_duration": 30 # שניות לתור
+        "game_over": False
     }
 
 def handle_move(state, big_r, big_c, small_r, small_c):
@@ -126,6 +141,7 @@ def handle_move(state, big_r, big_c, small_r, small_c):
         if (big_r, big_c) != (req_r, req_c):
             return False
     
+    # אם הלוח הגדול כבר מנוצח, אי אפשר לשחק בו (אלא אם חוקים אחרים, כאן זה חוסם)
     if state["macro_board"][big_r][big_c] != "":
         return False
 
@@ -150,14 +166,15 @@ def handle_move(state, big_r, big_c, small_r, small_c):
 
     # קביעת הלוח הבא
     target_r, target_c = small_r, small_c
+    
+    # אם הלוח שאליו נשלחנו מלא או מנוצח -> בחירה חופשית
     if state["macro_board"][target_r][target_c] != "" or is_board_full(state["board"][target_r][target_c]):
         state["next_board"] = None
     else:
         state["next_board"] = (target_r, target_c)
 
-    # החלפת תור ואיפוס טיימר
+    # החלפת תור
     state["current_turn"] = "O" if player == "X" else "X"
-    state["last_move_time"] = time.time()
     return True
 
 # --- AI (מחשב) ---
@@ -199,84 +216,63 @@ def get_ai_move(state):
 
 # --- רכיבי ממשק ---
 
-def render_timer():
-    """מציג ומנהל את הטיימר"""
-    st_state = st.session_state.game_state
-    if st_state["game_over"]:
-        return
-
-    # רענון אוטומטי כל שנייה כדי שהשעון יזוז
-    st_autorefresh(interval=1000, limit=None, key="timer_refresh")
-
-    elapsed = time.time() - st_state["last_move_time"]
-    remaining = st_state["turn_duration"] - elapsed
-    
-    # תצוגת הזמן
-    timer_color = "red" if remaining < 5 else "green"
-    st.markdown(f"""
-        <div style="text-align: center; font-size: 1.2em; font-weight: bold; color: {timer_color}; margin-bottom: 10px;">
-            ⏳ זמן נותר: {int(remaining)} שניות
-        </div>
-    """, unsafe_allow_html=True)
-
-    # טיפול בסיום הזמן (מהלך רנדומלי או העברת תור)
-    if remaining <= 0:
-        st.toast("הזמן נגמר! מבצע מהלך אקראי...")
-        # לוגיקה פשוטה: בחר מהלך רנדומלי חוקי
-        ai_move = get_ai_move(st_state) # משתמשים בלוגיקת ה-AI כדי למצוא מהלך חוקי
-        if ai_move:
-            br, bc, sr, sc = ai_move
-            # מבצעים את המהלך עבור השחקן הנוכחי (גם אם הוא אנושי)
-            # צריך לוודא שהפונקציה handle_move משתמשת ב-current_turn
-            handle_move(st_state, br, bc, sr, sc)
-            st.rerun()
-
 def render_board(is_locked=False):
     st_state = st.session_state.game_state
     
-    # הצגת הלוח
-    # לולאה חיצונית (לוחות גדולים)
+    # אנו בונים את הגריד הראשי ידנית כדי לשלוט בעיצוב
+    # לולאה חיצונית: שורות של לוחות גדולים
     for br in range(3):
-        cols = st.columns(3)
+        # יצירת 3 עמודות ללוחות הגדולים
+        big_cols = st.columns(3)
+        
         for bc in range(3):
-            with cols[bc]:
-                # בדיקה אם זה הלוח הפעיל
-                is_active = False
+            with big_cols[bc]:
+                # בדיקה האם הלוח הזה פעיל
+                is_active_board = False
                 if not st_state["game_over"] and st_state["macro_board"][br][bc] == "":
                     if st_state["next_board"] == (br, bc) or st_state["next_board"] is None:
-                        is_active = True
+                        is_active_board = True
                 
-                container_class = "active-board" if is_active else ""
+                # קביעת כותרת או סטטוס ללוח
+                status_text = "🔒"
+                if is_active_board:
+                    status_text = "🟢 פעיל"
+                elif st_state["macro_board"][br][bc] != "":
+                    status_text = "🏆 הושלם"
                 
-                winner = st_state["macro_board"][br][bc]
-                if winner:
-                    color_class = "won-x" if winner == "X" else "won-o"
-                    st.markdown(f'<div class="{color_class}">{winner}</div>', unsafe_allow_html=True)
-                else:
-                    # שימוש ב-container כדי לצייר מסגרת ללוח הפעיל
-                    with st.container():
-                        if is_active:
-                            st.markdown(f'<div class="{container_class}">', unsafe_allow_html=True)
-                        
-                        # לוח פנימי 3x3
+                # שימוש ב-container עם מסגרת כדי ליצור הפרדה ברורה
+                # אם הלוח פעיל, נשתמש בטריק של כותרת צבעונית או פשוט נסמוך על הכיתוב
+                border_color = "red" if is_active_board else "grey"
+                
+                with st.container(border=True):
+                    # כותרת קטנה מעל כל לוח 3X3
+                    if is_active_board:
+                        st.markdown(f"<div style='text-align:center; color:green; font-size:0.8em; font-weight:bold;'>{status_text}</div>", unsafe_allow_html=True)
+                    
+                    winner = st_state["macro_board"][br][bc]
+                    
+                    if winner:
+                        # הצגת ריבוע ניצחון גדול
+                        color_class = "won-x" if winner == "X" else "won-o"
+                        st.markdown(f'<div class="won-box {color_class}">{winner}</div>', unsafe_allow_html=True)
+                    else:
+                        # ציור הלוח הקטן 3X3
                         for sr in range(3):
-                            sub_cols = st.columns(3)
+                            # כאן הקסם: העמודות הפנימיות יקבלו את ה-CSS של 33% רוחב
+                            row_cols = st.columns(3)
                             for sc in range(3):
                                 cell_val = st_state["board"][br][bc][sr][sc]
                                 key = f"{br}-{bc}-{sr}-{sc}"
                                 
                                 # האם הכפתור פעיל?
-                                disabled = is_locked or cell_val != "" or st_state["game_over"]
-                                if not disabled and st_state["next_board"] is not None:
-                                    if st_state["next_board"] != (br, bc):
-                                        disabled = True
+                                disabled = is_locked or cell_val != "" or st_state["game_over"] or not is_active_board
                                 
-                                if sub_cols[sc].button(cell_val if cell_val else " ", key=key, disabled=disabled, use_container_width=True):
+                                # אם הכפתור לא פעיל, נציג אותו אבל כבוי
+                                # אם הוא פעיל, הוא יהיה לחיץ
+                                
+                                if row_cols[sc].button(cell_val if cell_val else " ", key=key, disabled=disabled, use_container_width=True):
                                     handle_move(st_state, br, bc, sr, sc)
                                     st.rerun()
-                        
-                        if is_active:
-                            st.markdown('</div>', unsafe_allow_html=True)
 
 # --- אפליקציה ראשית ---
 
@@ -290,7 +286,7 @@ def main():
     if "player_names" not in st.session_state:
         st.session_state.player_names = {"X": "שחקן X", "O": "שחקן O"}
 
-    with st.sidebar.expander("שמות שחקנים", expanded=True):
+    with st.sidebar.expander("שמות שחקנים", expanded=False):
         st.session_state.player_names["X"] = st.text_input("שם לשחקן X", st.session_state.player_names["X"])
         st.session_state.player_names["O"] = st.text_input("שם לשחקן O", st.session_state.player_names["O"])
 
@@ -299,46 +295,49 @@ def main():
     if st.session_state.firebase_enabled:
         modes.append("משחק אונליין")
     else:
-        st.sidebar.warning("מצב אונליין לא זמין (חסרים מפתחות Firebase)")
+        st.sidebar.warning("מצב אונליין לא זמין (חסרים מפתחות)")
         
     mode = st.sidebar.radio("בחר מצב משחק:", modes)
     
-    # הגדרת זמן לתור
-    turn_time = st.sidebar.slider("זמן לתור (שניות)", 10, 60, 30)
-    
     if st.sidebar.button("התחל משחק חדש", type="primary"):
         st.session_state.game_state = init_game_state()
-        st.session_state.game_state["turn_duration"] = turn_time
         st.session_state.online_game_id = None
         st.rerun()
 
     # אתחול מצב אם חסר
     if "game_state" not in st.session_state:
         st.session_state.game_state = init_game_state()
-        st.session_state.game_state["turn_duration"] = turn_time
 
     current_turn_symbol = st.session_state.game_state['current_turn']
     current_player_name = st.session_state.player_names[current_turn_symbol]
 
+    # --- תצוגת סטטוס עליונה ---
+    status_col1, status_col2 = st.columns(2)
+    with status_col1:
+        st.subheader(f"תור: {current_player_name} ({current_turn_symbol})")
+    with status_col2:
+        if st.session_state.game_state["next_board"]:
+            r, c = st.session_state.game_state["next_board"]
+            # המרה לטקסט ידידותי (למשל: עליון-שמאל)
+            row_names = ["עליון", "אמצע", "תחתון"]
+            col_names = ["שמאל", "מרכז", "ימין"]
+            st.info(f"יש לשחק בלוח: {row_names[r]}-{col_names[c]}")
+        else:
+            st.success("בחירה חופשית! שחק בכל לוח פנוי.")
+
     # --- מצב: מקומי ---
     if mode == "משחק מקומי (2 שחקנים)":
-        st.subheader(f"תור: {current_player_name} ({current_turn_symbol})")
-        render_timer()
         render_board()
         
         if st.session_state.game_state["winner"]:
             winner_sym = st.session_state.game_state['winner']
+            st.balloons()
             st.success(f"🎉 המנצח הוא: {st.session_state.player_names[winner_sym]}!")
 
     # --- מצב: נגד המחשב ---
     elif mode == "נגד המחשב":
-        st.subheader(f"תור: {current_player_name if current_turn_symbol == 'X' else 'מחשב'}")
-        
         # האדם הוא X, המחשב הוא O
         is_ai_turn = current_turn_symbol == "O" and not st.session_state.game_state["game_over"]
-        
-        if not is_ai_turn:
-            render_timer()
         
         render_board(is_locked=is_ai_turn)
 
@@ -352,7 +351,7 @@ def main():
         # תור המחשב
         if is_ai_turn:
             with st.spinner("המחשב חושב..."):
-                time.sleep(0.7)
+                time.sleep(0.5)
                 move = get_ai_move(st.session_state.game_state)
                 if move:
                     br, bc, sr, sc = move
@@ -361,52 +360,53 @@ def main():
 
     # --- מצב: אונליין ---
     elif mode == "משחק אונליין":
-        st.subheader("לובי אונליין")
-        
+        st.markdown("---")
         if "online_game_id" not in st.session_state:
             st.session_state.online_game_id = None
             st.session_state.player_side = None
 
-        c1, c2 = st.columns([3, 1])
-        game_id_input = c1.text_input("הכנס קוד חדר (למשל: room1)")
-        
-        if c2.button("הצטרף / צור"):
-            if game_id_input:
-                st.session_state.online_game_id = game_id_input
-                doc_ref = st.session_state.firebase_db.collection("games").document(game_id_input)
-                doc = doc_ref.get()
-                
-                my_name = st.session_state.player_names["X"] # שם זמני לכניסה
-                
-                if not doc.exists:
-                    # יצירת חדר חדש
-                    new_state = init_game_state()
-                    new_state["turn_duration"] = turn_time
-                    doc_ref.set({
-                        "data": json.dumps(new_state),
-                        "player_x_name": st.session_state.player_names["X"],
-                        "player_o_name": "ממתין...",
-                        "player_x_joined": True,
-                        "player_o_joined": False
-                    })
-                    st.session_state.player_side = "X"
-                    st.toast(f"חדר {game_id_input} נוצר. אתה X.")
-                else:
-                    # הצטרפות לחדר קיים
-                    data = doc.to_dict()
-                    if not data.get("player_o_joined"):
-                        doc_ref.update({
-                            "player_o_joined": True,
-                            "player_o_name": st.session_state.player_names["O"] # שולח את השם שהוגדר אצלי כ-O
+        if not st.session_state.online_game_id:
+            c1, c2 = st.columns([3, 1])
+            game_id_input = c1.text_input("הכנס קוד חדר (למשל: room1)")
+            if c2.button("הצטרף / צור"):
+                if game_id_input:
+                    st.session_state.online_game_id = game_id_input
+                    doc_ref = st.session_state.firebase_db.collection("games").document(game_id_input)
+                    doc = doc_ref.get()
+                    
+                    if not doc.exists:
+                        # יצירת חדר חדש
+                        new_state = init_game_state()
+                        doc_ref.set({
+                            "data": json.dumps(new_state),
+                            "player_x_name": st.session_state.player_names["X"],
+                            "player_o_name": "ממתין...",
+                            "player_x_joined": True,
+                            "player_o_joined": False
                         })
-                        st.session_state.player_side = "O"
-                        st.toast(f"הצטרפת לחדר {game_id_input}. אתה O.")
+                        st.session_state.player_side = "X"
+                        st.toast(f"חדר {game_id_input} נוצר. אתה X.")
                     else:
-                        st.session_state.player_side = "Spectator"
-                        st.warning("החדר מלא. אתה צופה בלבד.")
+                        # הצטרפות
+                        data = doc.to_dict()
+                        if not data.get("player_o_joined"):
+                            doc_ref.update({
+                                "player_o_joined": True,
+                                "player_o_name": st.session_state.player_names["O"]
+                            })
+                            st.session_state.player_side = "O"
+                            st.toast(f"הצטרפת לחדר {game_id_input}. אתה O.")
+                        else:
+                            st.session_state.player_side = "Spectator"
+                            st.warning("החדר מלא. אתה צופה בלבד.")
+                    st.rerun()
+
+        else:
+            # משחק פעיל אונליין
+            if st.button("יציאה מהחדר"):
+                st.session_state.online_game_id = None
                 st.rerun()
 
-        if st.session_state.online_game_id:
             doc_ref = st.session_state.firebase_db.collection("games").document(st.session_state.online_game_id)
             doc = doc_ref.get()
             
@@ -414,7 +414,6 @@ def main():
                 server_data = doc.to_dict()
                 current_server_state = json.loads(server_data["data"])
                 
-                # סנכרון שמות מהשרת
                 p_x = server_data.get("player_x_name", "X")
                 p_o = server_data.get("player_o_name", "O")
                 
@@ -422,22 +421,14 @@ def main():
                 turn = current_server_state["current_turn"]
                 me = st.session_state.player_side
                 
-                # תצוגת סטטוס
-                status_cols = st.columns(3)
-                status_cols[0].info(f"חדר: {st.session_state.online_game_id}")
-                status_cols[1].info(f"אתה: {me}")
-                status_cols[2].warning(f"תור: {p_x if turn == 'X' else p_o}")
-
-                # רענון אוטומטי למצב אונליין
-                st_autorefresh(interval=2000, key="online_sync")
+                st.info(f"חדר: {st.session_state.online_game_id} | אתה: {me} | יריב: {p_o if me=='X' else p_x}")
                 
+                # כפתור רענון ידני (במקום אוטומטי כבד)
+                if st.button("🔄 רענן לוח"):
+                    st.rerun()
+
                 is_locked = (turn != me) or (me == "Spectator") or current_server_state["game_over"]
                 
-                # הצגת טיימר (רק ויזואלי באונליין, הניהול מורכב יותר)
-                elapsed = time.time() - current_server_state["last_move_time"]
-                rem = current_server_state["turn_duration"] - elapsed
-                st.caption(f"זמן לתור: {int(rem)} שניות")
-
                 # שמירת מצב לפני שינוי
                 state_before = json.dumps(st.session_state.game_state)
                 
